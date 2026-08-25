@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>envmon</title>
+<link rel="stylesheet" href="vendor/uPlot.min.css">
+<link rel="stylesheet" href="style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='14' font-size='14'>💧</text></svg>">
+</head>
+<body>
+<header>
+  <h1>envmon</h1>
+  <span id="status">connecting…</span>
+</header>
+
+<main>
+  <div id="cards"></div>
+
+  <div id="ranges" role="group" aria-label="Time range"></div>
+
+  <div id="error" hidden></div>
+  <div id="empty" hidden>No readings in this range.</div>
+
+  <section class="chart-panel" id="panel-rh">
+    <h2>Relative humidity</h2>
+    <p class="note">Fixed 30–100 % axis with the mould line at <span id="thr">65</span> %.
+       Auto-scaling would make a flat 78 % look unremarkable.</p>
+    <div id="chart-rh"></div>
+  </section>
+
+  <section class="chart-panel" id="panel-t">
+    <h2>Temperature</h2>
+    <p class="note">Auto-scaled — here the shape matters more than the absolute value.</p>
+    <div id="chart-t"></div>
+  </section>
+</main>
+
+<script src="vendor/uPlot.iife.min.js"></script>
+<script src="config.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

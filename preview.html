@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>envmon — preview</title>
+<link rel="stylesheet" href="vendor/uPlot.min.css">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <h1>envmon <span style="color:var(--muted);font-weight:400">preview</span></h1>
+  <span id="status">connecting…</span>
+</header>
+<main>
+  <div id="cards"></div>
+  <div id="ranges" role="group" aria-label="Time range"></div>
+  <div id="error" hidden></div>
+  <div id="empty" hidden>No readings in this range.</div>
+  <section class="chart-panel" id="panel-rh">
+    <h2>Relative humidity</h2>
+    <p class="note">Fixed 30–100 % axis with the mould line at <span id="thr">65</span> %.
+       Auto-scaling would make a flat 78 % look unremarkable.</p>
+    <div id="chart-rh"></div>
+  </section>
+  <section class="chart-panel" id="panel-t">
+    <h2>Temperature</h2>
+    <p class="note">Auto-scaled — here the shape matters more than the absolute value.</p>
+    <div id="chart-t"></div>
+  </section>
+</main>
+
+<script src="vendor/uPlot.iife.min.js"></script>
+<script>
+/* Offline preview: stubs the Supabase call with synthetic readings so the
+ * layout, thresholds and gap handling can be worked on without a token or a
+ * live database. Shapes mirror what the real deployment produces, including a
+ * sensor that drops buckets. */
+window.ENVMON_CONFIG = { supabaseUrl: 'http://preview', token: 'preview', humidityThreshold: 65 };
+
+const ROOMS = [
+  { mac: 'A4:C1:38:5C:15:F1', label: 'Bed room',     rh: 84, t: 18.7, drop: 0.35 },
+  { mac: 'A4:C1:38:DE:38:9B', label: 'Living room',  rh: 79, t: 19.6, drop: 0.02 },
+  { mac: 'A4:C1:38:1A:8C:9A', label: 'Room B',       rh: 70, t: 19.4, drop: 0.02 },
+  { mac: 'A4:C1:38:1C:ED:5C', label: 'Laundry room', rh: 55, t: 21.1, drop: 0.15 },
+];
+
+window.fetch = async (url) => {
+  const hours = /gte\.([^&]+)/.exec(url);
+  const since = hours ? Date.parse(decodeURIComponent(hours[1])) : Date.now() - 864e5;
+  const step = 5 * 60e3;
+  const rows = [];
+  for (let t = since; t <= Date.now(); t += step) {
+    const phase = (t / 36e5) % 24;
+    for (const r of ROOMS) {
+      if (Math.random() < r.drop * 0.3) continue;      // a missed bucket
+      rows.push({
+        bucket: new Date(t).toISOString(),
+        mac: r.mac,
+        label: r.label,
+        humid: +(r.rh + Math.sin(phase / 3) * 3 + Math.random()).toFixed(2),
+        temp_c: +(r.t + Math.cos(phase / 4) * 1.2 + Math.random() * 0.2).toFixed(2),
+      });
+    }
+  }
+  return { ok: true, status: 200, json: async () => rows, text: async () => '' };
+};
+</script>
+<script src="app.js"></script>
+</body>
+</html>
