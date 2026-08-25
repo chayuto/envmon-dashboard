@@ -29,6 +29,27 @@ sensors do drop advertisements, so this is common and honest.
 
 **Red is reserved for the threshold**, so no room's series borrows it.
 
+## Interaction
+
+| Gesture | Effect |
+|---|---|
+| Click a room card | show only that room; click it again to restore all |
+| Click a legend entry | toggle that room |
+| Drag across a chart | zoom the time axis |
+| Scroll on a chart | zoom around the pointer |
+| Hover | crosshair on **both** charts at the same instant |
+| Reset view | clear zoom and show every room |
+
+Zoom and room selection **survive the 60-second poll**. That sounds like a
+detail and is the main reason this file is not fifty lines shorter: the obvious
+implementation rebuilds the chart on every refresh, which silently throws away
+whatever the user was looking at, so you can never hold a zoom for longer than
+one minute. Charts are created once and fed with `setData(..., false)`, and
+view state lives outside them.
+
+The range and the room filter are kept in the URL, so a filtered view is a
+shareable link.
+
 ## Setup
 
 ```sh
@@ -61,3 +82,14 @@ signing secret stays there; only the minted token belongs here.
 Static files, no build step: vanilla JS plus a vendored copy of
 [uPlot](https://github.com/leeoniya/uPlot) (MIT). Nothing to install, nothing
 to keep up to date, and deploying is committing.
+
+No framework, deliberately. Zoom, pan, crosshairs and series toggling belong to
+the charting library, not to a UI framework — React would add none of them, and
+would hit the same "re-render destroyed the chart's state" problem, solved the
+same way with an imperative update. With four sensors and two charts there is
+no cross-component state worth a build step. If this ever grows into many views
+with saved layouts, that is the point to reconsider.
+
+`window.__envmon` exposes the chart instances, room list and refresh for
+console poking; uPlot draws axes to canvas, so scale state is not otherwise
+observable.

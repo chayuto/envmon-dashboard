@@ -47,7 +47,15 @@ main { padding: 20px 24px 40px; max-width: 1400px; margin: 0 auto; }
   border-left: 3px solid var(--seriescolor, var(--accent));
   border-radius: 10px;
   padding: 14px 16px;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  transition: opacity .12s, border-color .12s;
 }
+.card:hover { border-color: var(--seriescolor, var(--accent)); }
+.card.muted { opacity: .38; }
+.card .unit { font-size: 16px; }
 .card .name { font-size: 13px; color: var(--muted); margin-bottom: 6px; }
 .card .rh { font-size: 30px; font-weight: 650; letter-spacing: -0.02em; }
 .card .rh.ok { color: var(--ok); }
@@ -62,7 +70,7 @@ main { padding: 20px 24px 40px; max-width: 1400px; margin: 0 auto; }
 .card .bar > span { display: block; height: 100%; background: var(--bad); }
 
 /* Controls --------------------------------------------------------------- */
-#ranges { display: flex; gap: 6px; margin-bottom: 16px; flex-wrap: wrap; }
+#ranges { display: flex; gap: 6px; margin-bottom: 16px; flex-wrap: wrap; align-items: center; }
 #ranges button {
   background: var(--panel); color: var(--muted);
   border: 1px solid var(--line); border-radius: 7px;
@@ -72,6 +80,7 @@ main { padding: 20px 24px 40px; max-width: 1400px; margin: 0 auto; }
 #ranges button[aria-pressed="true"] {
   color: var(--text); border-color: var(--accent); background: #1d2531;
 }
+#ranges button.ghost { margin-left: auto; }
 
 /* Charts ----------------------------------------------------------------- */
 .chart-panel {
@@ -95,3 +104,8 @@ main { padding: 20px 24px 40px; max-width: 1400px; margin: 0 auto; }
 }
 #error { color: var(--bad); border-color: #45252b; white-space: pre-wrap; text-align: left; }
 [hidden] { display: none !important; }
+
+/* uPlot's legend is a control here, not a caption. */
+.u-legend .u-series { cursor: pointer; }
+.u-legend .u-series.u-off { opacity: .4; }
+.u-over { touch-action: none; }
