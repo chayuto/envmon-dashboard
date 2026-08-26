@@ -37,7 +37,7 @@ main { padding: 20px 24px 40px; max-width: 1400px; margin: 0 auto; }
 /* Room cards ------------------------------------------------------------- */
 #cards {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
   gap: 12px;
   margin-bottom: 24px;
 }
@@ -55,13 +55,21 @@ main { padding: 20px 24px 40px; max-width: 1400px; margin: 0 auto; }
 }
 .card:hover { border-color: var(--seriescolor, var(--accent)); }
 .card.muted { opacity: .38; }
-.card .unit { font-size: 16px; }
-.card .name { font-size: 13px; color: var(--muted); margin-bottom: 6px; }
-.card .rh { font-size: 30px; font-weight: 650; letter-spacing: -0.02em; }
-.card .rh.ok { color: var(--ok); }
-.card .rh.warn { color: var(--warn); }
-.card .rh.bad { color: var(--bad); }
-.card .meta { font-size: 12px; color: var(--muted); margin-top: 6px; }
+.card .name { font-size: 13px; color: var(--muted); margin-bottom: 8px; }
+
+/* Humidity and temperature carry the same weight. Damp is the reason this
+ * exists, but the two only mean anything together: the same moisture reads as
+ * a different RH in a colder room, so shrinking one of them hides half the
+ * story. Colour still does the flagging, size does not. */
+.card .readings { display: flex; gap: 14px; }
+.card .reading { flex: 1 1 0; min-width: 0; }
+.card .value { font-size: 27px; font-weight: 650; letter-spacing: -0.02em; }
+.card .unit { font-size: 15px; font-weight: 500; margin-left: 2px; }
+.card .value.ok { color: var(--ok); }
+.card .value.warn { color: var(--warn); }
+.card .value.bad { color: var(--bad); }
+.card .value.temp { color: var(--text); }
+.card .rlabel { font-size: 11px; color: var(--muted); margin-top: 3px; }
 .card .exposure { font-size: 12px; margin-top: 8px; color: var(--muted); }
 .card .bar {
   height: 4px; border-radius: 2px; background: var(--line);

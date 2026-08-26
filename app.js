@@ -144,8 +144,16 @@ function renderCards() {
     card.title = isHidden ? 'Show this room' : 'Show only this room';
     card.innerHTML = `
       <div class="name">${room.label}</div>
-      <div class="rh ${classify(rh)}">${fmt1(rh)}<span class="unit"> %</span></div>
-      <div class="meta">${fmt1(t)} °C</div>
+      <div class="readings">
+        <div class="reading">
+          <div class="value ${classify(rh)}">${fmt1(rh)}<span class="unit">%</span></div>
+          <div class="rlabel">humidity</div>
+        </div>
+        <div class="reading">
+          <div class="value temp">${fmt1(t)}<span class="unit">°C</span></div>
+          <div class="rlabel">temperature</div>
+        </div>
+      </div>
       <div class="exposure">${exp == null ? 'no data'
         : `${Math.round(exp * 100)}% of ${range.label} above ${THRESHOLD}%`}</div>
       <div class="bar"><span style="width:${Math.round((exp || 0) * 100)}%"></span></div>`;
