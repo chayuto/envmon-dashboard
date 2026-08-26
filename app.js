@@ -62,19 +62,22 @@ function setStatus(text, cls) {
 }
 
 async function fetchRows(hours) {
-  if (!CFG.supabaseUrl || CFG.token?.startsWith('PASTE_')) {
+  if (!CFG.supabaseUrl || !CFG.apiKey || CFG.token?.startsWith('PASTE_')) {
     throw new Error(
       'config.js is not filled in.\n\n' +
-      'Copy config.example.js to config.js and paste a dashboard_reader JWT.\n' +
-      'Mint one with supabase/mint_dashboard_jwt.py in the firmware repo.');
+      'Copy config.example.js to config.js, then set supabaseUrl, apiKey\n' +
+      '(the publishable key) and token (a dashboard_reader JWT, minted with\n' +
+      'supabase/mint_dashboard_jwt.py in the firmware repo).');
   }
   const since = new Date(Date.now() - hours * 3600e3).toISOString();
   const url = `${CFG.supabaseUrl}/rest/v1/reading_5m` +
               `?select=bucket,mac,label,temp_c,humid` +
               `&bucket=gte.${since}&order=bucket.asc&limit=20000`;
 
+  // apikey gets past the gateway; the Bearer JWT is what PostgREST SET ROLEs
+  // to. Sending the JWT as apikey too is rejected before it reaches Postgres.
   const res = await fetch(url, {
-    headers: { apikey: CFG.token, Authorization: `Bearer ${CFG.token}` },
+    headers: { apikey: CFG.apiKey, Authorization: `Bearer ${CFG.token}` },
   });
   if (!res.ok) throw new Error(`Supabase returned ${res.status}\n\n${await res.text()}`);
   return res.json();

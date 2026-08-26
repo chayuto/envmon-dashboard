@@ -1,12 +1,21 @@
 // Copy to config.js and fill in. config.js is what the app actually loads.
 //
-// The token is a dashboard_reader JWT: it can SELECT the reading_5m view and
-// nothing else. It ships in the page and is therefore public by design — that
-// is why it is not the publishable key and not service_role. Mint it with
-// supabase/mint_dashboard_jwt.py in the firmware repo.
+// TWO credentials are needed, and they are not interchangeable:
+//
+//   apiKey  the project's publishable key. Supabase's gateway authenticates
+//           every request against a real API key before PostgREST ever sees
+//           it, so a bare JWT in this header is rejected as "Invalid API key".
+//           On its own this key is `anon`, which cannot read reading_5m.
+//   token   a dashboard_reader JWT. PostgREST reads its `role` claim and SET
+//           ROLEs to it, which is what actually grants the read. Mint it with
+//           supabase/mint_dashboard_jwt.py in the firmware repo.
+//
+// Both ship in the page and are public by design. Neither is service_role, and
+// the JWT alone cannot write anything.
 window.ENVMON_CONFIG = {
-  supabaseUrl: "https://YOUR_PROJECT_REF.supabase.co",
-  token: "PASTE_DASHBOARD_JWT_HERE",
+  supabaseUrl: "https://cxjzerofzbjrwokbsxjc.supabase.co",
+  apiKey: "sb_publishable_QjLbwYigYa01kjFHkEAkzw_CDudt4vv",
+  token: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiZGFzaGJvYXJkX3JlYWRlciIsImlzcyI6InN1cGFiYXNlIiwiaWF0IjoxNzg3NzI3OTg5LCJleHAiOjE5NDU0MDc5ODl9.UcSmNnnygQV6lubLN52LrRpO24pYngeuOCxLAXNOMbA",
 
   // Sustained relative humidity above this supports mould growth. The whole
   // dashboard is oriented around this line rather than around pretty curves.
