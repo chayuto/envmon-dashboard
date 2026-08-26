@@ -81,6 +81,9 @@ main { padding: 20px 24px 40px; max-width: 1400px; margin: 0 auto; }
   color: var(--text); border-color: var(--accent); background: #1d2531;
 }
 #ranges button.ghost { margin-left: auto; }
+/* Sits directly after the range buttons; .ghost's auto margin takes the rest
+ * of the row, so this needs no margin of its own. */
+#ranges .hint { font-size: 12px; color: var(--muted); }
 
 /* Charts ----------------------------------------------------------------- */
 .chart-panel {

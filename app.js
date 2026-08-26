@@ -167,13 +167,21 @@ function renderCards() {
 
 /* --- charts ------------------------------------------------------------- */
 
-/* uPlot has no wheel zoom of its own; this is the documented recipe, anchored
- * on the cursor so the point under the pointer stays put. */
-function wheelZoom(factor = 0.75) {
+/* uPlot has no wheel zoom of its own. Anchored on the cursor so the point under
+ * the pointer stays put, and deliberately NOT bound to a bare wheel: a chart
+ * that eats the scroll wheel makes the page impossible to scroll past. Zoom is
+ * opt-in with a held modifier — which is also what a trackpad pinch sends, as
+ * the browser synthesises ctrlKey for it. Drag-select still zooms, unmodified.
+ *
+ * `strength` is per wheel-delta unit rather than per event, so a trackpad's
+ * stream of small deltas and a mouse's few large ones land in the same place;
+ * `maxStep` stops one flick from swallowing the whole range. */
+function wheelZoom({ strength = 0.0015, maxStep = 0.2 } = {}) {
   return {
     hooks: {
       ready: (u) => {
         u.over.addEventListener('wheel', (e) => {
+          if (!e.ctrlKey && !e.metaKey) return;   // plain scroll is the page's
           if (!e.deltaY) return;
           e.preventDefault();
           const left = u.cursor.left;
@@ -181,7 +189,8 @@ function wheelZoom(factor = 0.75) {
           const pct = left / u.over.clientWidth;
           const xVal = u.posToVal(left, 'x');
           const oldRange = u.scales.x.max - u.scales.x.min;
-          const newRange = e.deltaY < 0 ? oldRange * factor : oldRange / factor;
+          const step = Math.max(-maxStep, Math.min(maxStep, e.deltaY * strength));
+          const newRange = oldRange * Math.exp(step);
           const min = xVal - pct * newRange;
           u.batch(() => u.setScale('x', { min, max: min + newRange }));
         }, { passive: false });
@@ -339,6 +348,13 @@ function buildControls() {
 
   const reset = document.createElement('button');
   reset.className = 'ghost';
+  const hint = document.createElement('span');
+  hint.className = 'hint';
+  hint.textContent = navigator.platform.startsWith('Mac')
+    ? 'drag to zoom · ⌘+scroll or pinch to zoom · double-click to reset'
+    : 'drag to zoom · ctrl+scroll to zoom · double-click to reset';
+  el.appendChild(hint);
+
   reset.textContent = 'Reset view';
   reset.title = 'Clear zoom and show every room';
   reset.onclick = () => {
