@@ -117,15 +117,6 @@ function classify(rh) {
   return 'ok';
 }
 
-/* Share of the window each room spent above the threshold. For damp this is
- * the number that matters — a brief spike is nothing, a persistent 78 % is the
- * whole problem, and both look similar on a line chart. */
-function exposure(room) {
-  const seen = room.humid.filter((v) => v != null);
-  if (!seen.length) return null;
-  return seen.filter((v) => v >= THRESHOLD).length / seen.length;
-}
-
 /* --- cards -------------------------------------------------------------- */
 
 function renderCards() {
@@ -135,7 +126,6 @@ function renderCards() {
     const lastIdx = room.humid.reduce((acc, v, n) => (v != null ? n : acc), -1);
     const rh = lastIdx >= 0 ? room.humid[lastIdx] : null;
     const t = lastIdx >= 0 ? room.temp[lastIdx] : null;
-    const exp = exposure(room);
     const isHidden = hidden.has(room.mac);
 
     const card = document.createElement('button');
@@ -153,10 +143,7 @@ function renderCards() {
           <div class="value temp">${fmt1(t)}<span class="unit">°C</span></div>
           <div class="rlabel">temperature</div>
         </div>
-      </div>
-      <div class="exposure">${exp == null ? 'no data'
-        : `${Math.round(exp * 100)}% of ${range.label} above ${THRESHOLD}%`}</div>
-      <div class="bar"><span style="width:${Math.round((exp || 0) * 100)}%"></span></div>`;
+      </div>`;
 
     /* Clicking a card isolates that room; clicking the isolated one restores
      * everything. The card is the thing you are already looking at when you

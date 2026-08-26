@@ -70,12 +70,6 @@ main { padding: 20px 24px 40px; max-width: 1400px; margin: 0 auto; }
 .card .value.bad { color: var(--bad); }
 .card .value.temp { color: var(--text); }
 .card .rlabel { font-size: 11px; color: var(--muted); margin-top: 3px; }
-.card .exposure { font-size: 12px; margin-top: 8px; color: var(--muted); }
-.card .bar {
-  height: 4px; border-radius: 2px; background: var(--line);
-  margin-top: 4px; overflow: hidden;
-}
-.card .bar > span { display: block; height: 100%; background: var(--bad); }
 
 /* Controls --------------------------------------------------------------- */
 #ranges { display: flex; gap: 6px; margin-bottom: 16px; flex-wrap: wrap; align-items: center; }
