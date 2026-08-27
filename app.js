@@ -39,7 +39,7 @@ const SYNC = uPlot.sync('envmon');
 let range = RANGES[1];
 let hidden = new Set();          // macs the user has switched off
 let rooms = [];                  // last render's room list
-const charts = { rh: null, t: null };
+const charts = { rh: null, t: null, b: null };
 
 const $ = (id) => document.getElementById(id);
 const fmt1 = (v) => (v == null ? '—' : v.toFixed(1));
@@ -90,7 +90,7 @@ async function fetchRows(hours) {
   const out = [];
   for (let offset = 0; ; offset += PAGE) {
     const url = `${CFG.supabaseUrl}/rest/v1/${range.view}` +
-                `?select=bucket,mac,label,temp_c,humid` +
+                `?select=bucket,mac,label,temp_c,humid,battery` +
                 `&bucket=gte.${since}&order=bucket.asc,mac.asc` +
                 `&limit=${PAGE}&offset=${offset}`;
     const res = await fetch(url, { headers });
@@ -120,12 +120,14 @@ function toSeries(rows) {
         label: r.label || r.mac.slice(-5),
         humid: new Array(times.length).fill(null),
         temp: new Array(times.length).fill(null),
+        batt: new Array(times.length).fill(null),
       });
     }
     const room = byMac.get(r.mac);
     const i = index.get(r.bucket);
     room.humid[i] = r.humid;
     room.temp[i] = r.temp_c;
+    room.batt[i] = r.battery;
   }
 
   const list = [...byMac.values()].sort((a, b) => a.label.localeCompare(b.label));
@@ -139,7 +141,48 @@ function classify(rh) {
   return 'ok';
 }
 
+/* Least-squares %/day from the battery series, projected to 0 %.
+ *
+ * The H5075 reports whole percent, so over a short window the series is a
+ * staircase of one or two steps and a fit through it is mostly quantisation
+ * noise. Refuse to answer until the pack has actually moved MIN_DROP points:
+ * a projection off a single step carries no information, and showing one is
+ * worse than showing nothing. */
+const MIN_DROP = 3;
+
+function batteryLife(room, xs) {
+  const pts = [];
+  for (let i = 0; i < xs.length; i++) {
+    if (room.batt[i] != null) pts.push([xs[i] / 86400, room.batt[i]]);
+  }
+  if (pts.length < 2) return { pct: pts.length ? pts[0][1] : null };
+  const n = pts.length;
+  const now = pts[n - 1][1];
+  const spanDays = pts[n - 1][0] - pts[0][0];
+  if (pts[0][1] - now < MIN_DROP) return { pct: now, spanDays };
+
+  const mx = pts.reduce((a, q) => a + q[0], 0) / n;
+  const my = pts.reduce((a, q) => a + q[1], 0) / n;
+  let num = 0, den = 0;
+  for (const [x, y] of pts) { num += (x - mx) * (y - my); den += (x - mx) ** 2; }
+  const slope = den ? num / den : 0;          // % per day, negative while draining
+  if (slope >= 0) return { pct: now, spanDays };
+  return { pct: now, spanDays, perDay: -slope, daysLeft: now / -slope };
+}
+
 /* --- cards -------------------------------------------------------------- */
+
+/* One line per card: the level now, and a projection only once it is earned. */
+function battLine(room) {
+  const b = room.life;
+  if (!b || b.pct == null) return 'battery —';
+  const pct = `battery ${b.pct}%`;
+  if (b.daysLeft == null) return `${pct} · drain rate needs more data`;
+  const months = b.daysLeft / 30.44;
+  const left = months >= 2 ? `~${months.toFixed(1)} months left`
+                           : `~${Math.round(b.daysLeft)} days left`;
+  return `${pct} · ${b.perDay.toFixed(2)} %/day · ${left}`;
+}
 
 function renderCards() {
   const el = $('cards');
@@ -165,7 +208,8 @@ function renderCards() {
           <div class="value temp">${fmt1(t)}<span class="unit">°C</span></div>
           <div class="rlabel">temperature</div>
         </div>
-      </div>`;
+      </div>
+      <div class="batt">${battLine(room)}</div>`;
 
     /* Clicking a card isolates that room; clicking the isolated one restores
      * everything. The card is the thing you are already looking at when you
@@ -248,7 +292,7 @@ function seriesDefs(valueFmt) {
 }
 
 function applyHidden() {
-  for (const u of [charts.rh, charts.t]) {
+  for (const u of [charts.rh, charts.t, charts.b]) {
     if (!u) continue;
     rooms.forEach((room, i) => {
       const want = !hidden.has(room.mac);
@@ -305,7 +349,7 @@ function upsertChart(kind, target, data, valueFmt, yRange, threshold, resetScale
 /* Setting the scale to null does not restore extents in uPlot — it has to be
  * pointed back at the data's own range explicitly. */
 function resetZoom() {
-  for (const u of [charts.rh, charts.t]) {
+  for (const u of [charts.rh, charts.t, charts.b]) {
     if (!u) continue;
     const xs = u.data[0];
     if (xs && xs.length) u.setScale('x', { min: xs[0], max: xs[xs.length - 1] });
@@ -324,22 +368,25 @@ async function refresh({ resetScales = false } = {}) {
 
     if (!rows.length) {
       $('empty').hidden = false;
-      $('panel-rh').hidden = $('panel-t').hidden = true;
+      $('panel-rh').hidden = $('panel-t').hidden = $('panel-b').hidden = true;
       $('cards').innerHTML = '';
       setStatus('no data in range', 'stale');
       return;
     }
     $('empty').hidden = true;
-    $('panel-rh').hidden = $('panel-t').hidden = false;
+    $('panel-rh').hidden = $('panel-t').hidden = $('panel-b').hidden = false;
 
     const shaped = toSeries(rows);
     rooms = shaped.rooms;
+    for (const r of rooms) r.life = batteryLife(r, shaped.x);
     renderCards();
 
     upsertChart('rh', 'chart-rh', [shaped.x, ...rooms.map((r) => r.humid)],
                 (v) => `${v.toFixed(1)} %`, [30, 100], THRESHOLD, resetScales);
     upsertChart('t', 'chart-t', [shaped.x, ...rooms.map((r) => r.temp)],
                 (v) => `${v.toFixed(1)} °C`, null, null, resetScales);
+    upsertChart('b', 'chart-b', [shaped.x, ...rooms.map((r) => r.batt)],
+                (v) => `${v.toFixed(0)} %`, [0, 100], null, resetScales);
     applyHidden();
 
     const newest = new Date(rows[rows.length - 1].bucket);
@@ -395,6 +442,7 @@ window.__envmon = {
   charts,
   refresh,
   resetZoom,
+  batteryLife,          // exposed for tests: the projection is easy to get wrong
   get rooms() { return rooms; },
   get hidden() { return [...hidden]; },
 };
