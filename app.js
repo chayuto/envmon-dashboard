@@ -19,12 +19,20 @@ const THRESHOLD = CFG.humidityThreshold ?? 65;
 /* Red is reserved for the mould threshold, so no room borrows it. */
 const COLORS = ['#4fc3f7', '#ffd54f', '#81c784', '#ba68c8', '#4dd0e1', '#f06292'];
 
+/* `view` picks the server-side rollup. Five-minute buckets are wasted on a
+ * month — 4 sensors burn ~35k rows to draw a 300 px line — and PostgREST hands
+ * back at most PAGE rows per request, so the coarse view is what keeps the long
+ * ranges to one or two round trips. */
 const RANGES = [
-  { id: '6h',  label: '6 h',  hours: 6 },
-  { id: '24h', label: '24 h', hours: 24 },
-  { id: '7d',  label: '7 d',  hours: 24 * 7 },
-  { id: '30d', label: '30 d', hours: 24 * 30 },
+  { id: '6h',  label: '6 h',  hours: 6,       view: 'reading_5m' },
+  { id: '24h', label: '24 h', hours: 24,      view: 'reading_5m' },
+  { id: '7d',  label: '7 d',  hours: 24 * 7,  view: 'reading_1h' },
+  { id: '30d', label: '30 d', hours: 24 * 30, view: 'reading_1h' },
 ];
+
+/* PostgREST's hard ceiling per response. Asking for more is silently ignored,
+ * which is why this is a paging size and not a limit. */
+const PAGE = 1000;
 
 const SYNC = uPlot.sync('envmon');
 
@@ -70,17 +78,31 @@ async function fetchRows(hours) {
       'supabase/mint_dashboard_jwt.py in the firmware repo).');
   }
   const since = new Date(Date.now() - hours * 3600e3).toISOString();
-  const url = `${CFG.supabaseUrl}/rest/v1/reading_5m` +
-              `?select=bucket,mac,label,temp_c,humid` +
-              `&bucket=gte.${since}&order=bucket.asc&limit=20000`;
-
   // apikey gets past the gateway; the Bearer JWT is what PostgREST SET ROLEs
   // to. Sending the JWT as apikey too is rejected before it reaches Postgres.
-  const res = await fetch(url, {
-    headers: { apikey: CFG.apiKey, Authorization: `Bearer ${CFG.token}` },
-  });
-  if (!res.ok) throw new Error(`Supabase returned ${res.status}\n\n${await res.text()}`);
-  return res.json();
+  const headers = { apikey: CFG.apiKey, Authorization: `Bearer ${CFG.token}` };
+
+  /* Page until the server returns a short page. A bare `limit` cannot be
+   * trusted: PostgREST caps responses at PAGE rows and says nothing about it,
+   * so a single request quietly returned the OLDEST ~21 h and dropped
+   * everything newer — the chart looked fine and was hours out of date.
+   * The sort must be total (bucket, then mac) or rows shift between pages. */
+  const out = [];
+  for (let offset = 0; ; offset += PAGE) {
+    const url = `${CFG.supabaseUrl}/rest/v1/${range.view}` +
+                `?select=bucket,mac,label,temp_c,humid` +
+                `&bucket=gte.${since}&order=bucket.asc,mac.asc` +
+                `&limit=${PAGE}&offset=${offset}`;
+    const res = await fetch(url, { headers });
+    if (!res.ok) throw new Error(`Supabase returned ${res.status}\n\n${await res.text()}`);
+    const page = await res.json();
+    out.push(...page);
+    if (page.length < PAGE) return out;
+    if (offset > 200_000) {          // never spin forever on a server change
+      console.warn('envmon: stopped paging at', out.length, 'rows');
+      return out;
+    }
+  }
 }
 
 /* PostgREST gives one row per (bucket, sensor); uPlot wants columns aligned on
@@ -237,12 +259,15 @@ function applyHidden() {
 
 /* Rebuild only when the set of rooms changes. Otherwise feed the existing
  * chart, with resetScales=false so a zoom the user set survives the poll. */
-function upsertChart(kind, target, data, valueFmt, yRange, threshold) {
+function upsertChart(kind, target, data, valueFmt, yRange, threshold, resetScales) {
   const key = rooms.map((r) => r.mac).join(',');
   const existing = charts[kind];
 
   if (existing && existing.__key === key) {
-    existing.setData(data, false);
+    /* resetScales=false is what preserves a zoom across the 60 s poll. It must
+     * be true when the window itself changed, or the new data is drawn inside
+     * the old range — which looked like "the chart needs two clicks to load". */
+    existing.setData(data, resetScales === true);
     return;
   }
   if (existing) existing.destroy();
@@ -289,7 +314,10 @@ function resetZoom() {
 
 /* --- main loop ---------------------------------------------------------- */
 
-async function refresh() {
+/* `resetScales` belongs to the caller, not to this function: only the caller
+ * knows whether the x window changed (range button) or is the same window
+ * one poll later. */
+async function refresh({ resetScales = false } = {}) {
   try {
     $('error').hidden = true;
     const rows = await fetchRows(range.hours);
@@ -309,9 +337,9 @@ async function refresh() {
     renderCards();
 
     upsertChart('rh', 'chart-rh', [shaped.x, ...rooms.map((r) => r.humid)],
-                (v) => `${v.toFixed(1)} %`, [30, 100], THRESHOLD);
+                (v) => `${v.toFixed(1)} %`, [30, 100], THRESHOLD, resetScales);
     upsertChart('t', 'chart-t', [shaped.x, ...rooms.map((r) => r.temp)],
-                (v) => `${v.toFixed(1)} °C`, null, null);
+                (v) => `${v.toFixed(1)} °C`, null, null, resetScales);
     applyHidden();
 
     const newest = new Date(rows[rows.length - 1].bucket);
@@ -334,9 +362,8 @@ function buildControls() {
       range = r;
       [...el.querySelectorAll('button[aria-pressed]')].forEach((c) =>
         c.setAttribute('aria-pressed', String(c === b)));
-      resetZoom();
       writeUrl();
-      refresh();
+      refresh({ resetScales: true });
     };
     el.appendChild(b);
   });
@@ -377,7 +404,7 @@ $('thr').textContent = THRESHOLD;
 buildControls();
 writeUrl();
 refresh();
-setInterval(refresh, 60_000);
+setInterval(() => refresh(), 60_000);   // no args: the poll must not reset scales
 
 /* Resize needs the chart resized, not rebuilt — rebuilding would drop zoom. */
 let resizeTimer;
