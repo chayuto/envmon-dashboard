@@ -88,6 +88,25 @@ main { padding: 20px 24px 40px; max-width: 1400px; margin: 0 auto; }
 #ranges .hint { font-size: 12px; color: var(--muted); }
 .card .batt { font-size: 11px; color: var(--muted); margin-top: 10px; }
 
+/* Companion cursor: the same clock time 24 h earlier. Dotted so it never reads
+ * as the live crosshair, and pointer-events:none so it cannot eat the mouse. */
+.u-companion {
+  position: absolute;
+  top: 0;
+  height: 100%;
+  border-left: 1px dotted #7f8899;
+  pointer-events: none;
+  display: none;
+}
+.u-companion-tag {
+  position: absolute;
+  top: 2px;
+  left: 4px;
+  font-size: 10px;
+  color: #7f8899;
+  white-space: nowrap;
+}
+
 /* Charts ----------------------------------------------------------------- */
 .chart-panel {
   background: var(--panel);

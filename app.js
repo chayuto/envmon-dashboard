@@ -260,6 +260,55 @@ function wheelZoom({ strength = 0.0015, maxStep = 0.2 } = {}) {
   };
 }
 
+/* A second cursor line, offset from the live one by a fixed interval.
+ *
+ * This CANNOT be a canvas draw hook: uPlot draws the plot once and moves the
+ * real cursor as a DOM overlay, so a canvas line would only update on redraw
+ * and would sit still while the mouse moved. It has to be DOM too, positioned
+ * from the setCursor hook.
+ *
+ * Default offset is 24 h back, which is the comparison this dashboard is for:
+ * park the cursor on 06:00 today and the dotted line is 06:00 yesterday, so
+ * "is this dawn worse than the last one" is a glance instead of arithmetic. */
+function companionCursor(offsetSec = 86400) {
+  return {
+    hooks: {
+      init: [(u) => {
+        const line = document.createElement('div');
+        line.className = 'u-companion';
+        const tag = document.createElement('div');
+        tag.className = 'u-companion-tag';
+        line.appendChild(tag);
+        u.over.appendChild(line);
+        u.__companion = line;
+        u.__companionTag = tag;
+      }],
+      setCursor: [(u) => {
+        const line = u.__companion;
+        if (!line) return;
+        const left = u.cursor.left;
+        if (left == null || left < 0) { line.style.display = 'none'; return; }
+
+        // Anchor on the data point the legend is showing, not the raw pixel:
+        // the legend snaps to the nearest bucket, so posToVal here would put
+        // the line a few minutes off the value being compared against.
+        const cursorT = u.cursor.idx != null ? u.data[0][u.cursor.idx]
+                                             : u.posToVal(left, 'x');
+        const t = cursorT - offsetSec;
+        // Off the left edge once the cursor is within one offset of the start:
+        // there is no yesterday to compare against, so show nothing.
+        if (t < u.scales.x.min) { line.style.display = 'none'; return; }
+
+        line.style.display = 'block';
+        line.style.left = u.valToPos(t, 'x') + 'px';
+        u.__companionTag.textContent =
+          new Date(t * 1000).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'})
+          + ' \u2212' + Math.round(offsetSec / 3600) + 'h';
+      }],
+    },
+  };
+}
+
 function thresholdLine(value) {
   return {
     hooks: {
@@ -327,7 +376,8 @@ function upsertChart(kind, target, data, valueFmt, yRange, threshold, resetScale
       { stroke: '#8b93a3', grid: { stroke: '#262b36' }, ticks: { stroke: '#262b36' } },
       { stroke: '#8b93a3', grid: { stroke: '#262b36' }, ticks: { stroke: '#262b36' } },
     ],
-    plugins: threshold ? [wheelZoom(), thresholdLine(threshold)] : [wheelZoom()],
+    plugins: threshold ? [wheelZoom(), companionCursor(), thresholdLine(threshold)]
+                       : [wheelZoom(), companionCursor()],
     hooks: {
       /* Legend clicks change visibility inside uPlot; mirror it into our own
        * state so the cards, the URL and the other chart agree. */
