@@ -23,12 +23,26 @@ const COLORS = ['#4fc3f7', '#ffd54f', '#81c784', '#ba68c8', '#4dd0e1', '#f06292'
  * month — 4 sensors burn ~35k rows to draw a 300 px line — and PostgREST hands
  * back at most PAGE rows per request, so the coarse view is what keeps the long
  * ranges to one or two round trips. */
+/* `companion` places a rolling set of dotted cursors behind the live one, at
+ * step, 2*step, 3*step ... back. Park the crosshair on 06:00 and you get 06:00
+ * on every previous day at once, which is the shape of the question here: not
+ * "was yesterday worse" but "is this getting better or worse".
+ *
+ * An offset only means anything when it is shorter than the visible span --
+ * beyond that the line falls off the left edge and never appears. So the short
+ * views get none, the week steps by a day, and the month steps by a week
+ * because 30 daily lines would be a picket fence. */
 const RANGES = [
-  { id: '6h',  label: '6 h',  hours: 6,       view: 'reading_5m' },
-  { id: '24h', label: '24 h', hours: 24,      view: 'reading_5m' },
-  { id: '7d',  label: '7 d',  hours: 24 * 7,  view: 'reading_1h' },
-  { id: '30d', label: '30 d', hours: 24 * 30, view: 'reading_1h' },
+  { id: '6h',  label: '6 h',  hours: 6,       view: 'reading_5m', companion: null },
+  { id: '24h', label: '24 h', hours: 24,      view: 'reading_5m', companion: null },
+  { id: '7d',  label: '7 d',  hours: 24 * 7,  view: 'reading_1h',
+    companion: { step: 86400,     max: 6, unit: 'd' } },
+  { id: '30d', label: '30 d', hours: 24 * 30, view: 'reading_1h',
+    companion: { step: 7 * 86400, max: 4, unit: 'w' } },
 ];
+
+/* Enough line elements for the largest `max` above. */
+const COMPANION_MAX = 6;
 
 /* PostgREST's hard ceiling per response. Asking for more is silently ignored,
  * which is why this is a paging size and not a limit. */
@@ -260,50 +274,57 @@ function wheelZoom({ strength = 0.0015, maxStep = 0.2 } = {}) {
   };
 }
 
-/* A second cursor line, offset from the live one by a fixed interval.
+/* Rolling companion cursors: the same clock time one step back, two steps
+ * back, and so on, fading with age.
  *
- * This CANNOT be a canvas draw hook: uPlot draws the plot once and moves the
+ * These CANNOT be canvas draw hooks. uPlot draws the plot once and moves the
  * real cursor as a DOM overlay, so a canvas line would only update on redraw
- * and would sit still while the mouse moved. It has to be DOM too, positioned
- * from the setCursor hook.
+ * and would sit still while the mouse moved. They have to be DOM too, driven
+ * from setCursor.
  *
- * Default offset is 24 h back, which is the comparison this dashboard is for:
- * park the cursor on 06:00 today and the dotted line is 06:00 yesterday, so
- * "is this dawn worse than the last one" is a glance instead of arithmetic. */
-function companionCursor(offsetSec = 86400) {
+ * The step is read live rather than captured, because the range can change
+ * without the chart being rebuilt. */
+function companionCursor() {
   return {
     hooks: {
       init: [(u) => {
-        const line = document.createElement('div');
-        line.className = 'u-companion';
-        const tag = document.createElement('div');
-        tag.className = 'u-companion-tag';
-        line.appendChild(tag);
-        u.over.appendChild(line);
-        u.__companion = line;
-        u.__companionTag = tag;
+        u.__companions = [];
+        for (let k = 0; k < COMPANION_MAX; k++) {
+          const line = document.createElement('div');
+          line.className = 'u-companion';
+          // Older lines fade, so depth reads at a glance and the nearest
+          // comparison stays the most prominent.
+          line.style.opacity = String(1 - k * 0.13);
+          const tag = document.createElement('div');
+          tag.className = 'u-companion-tag';
+          line.appendChild(tag);
+          u.over.appendChild(line);
+          u.__companions.push({ line, tag });
+        }
       }],
       setCursor: [(u) => {
-        const line = u.__companion;
-        if (!line) return;
+        const set = u.__companions;
+        if (!set) return;
+        const cfg = range.companion;
         const left = u.cursor.left;
-        if (left == null || left < 0) { line.style.display = 'none'; return; }
+        const hideAll = () => set.forEach((c) => { c.line.style.display = 'none'; });
+        if (!cfg || left == null || left < 0) return hideAll();
 
         // Anchor on the data point the legend is showing, not the raw pixel:
         // the legend snaps to the nearest bucket, so posToVal here would put
-        // the line a few minutes off the value being compared against.
+        // the lines a few minutes off the values being compared against.
         const cursorT = u.cursor.idx != null ? u.data[0][u.cursor.idx]
                                              : u.posToVal(left, 'x');
-        const t = cursorT - offsetSec;
-        // Off the left edge once the cursor is within one offset of the start:
-        // there is no yesterday to compare against, so show nothing.
-        if (t < u.scales.x.min) { line.style.display = 'none'; return; }
-
-        line.style.display = 'block';
-        line.style.left = u.valToPos(t, 'x') + 'px';
-        u.__companionTag.textContent =
-          new Date(t * 1000).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'})
-          + ' \u2212' + Math.round(offsetSec / 3600) + 'h';
+        for (let k = 0; k < set.length; k++) {
+          const { line, tag } = set[k];
+          const n = k + 1;
+          const t = cursorT - n * cfg.step;
+          // Past the start of the loaded range there is nothing to point at.
+          if (n > cfg.max || t < u.scales.x.min) { line.style.display = 'none'; continue; }
+          line.style.display = 'block';
+          line.style.left = u.valToPos(t, 'x') + 'px';
+          tag.textContent = '\u2212' + n + cfg.unit;
+        }
       }],
     },
   };
