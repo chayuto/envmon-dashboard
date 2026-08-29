@@ -19,6 +19,38 @@ const THRESHOLD = CFG.humidityThreshold ?? 65;
 /* Red is reserved for the mould threshold, so no room borrows it. */
 const COLORS = ['#4fc3f7', '#ffd54f', '#81c784', '#ba68c8', '#4dd0e1', '#f06292'];
 
+/* Colour belongs to the sensor, not to its position in a sorted list. Keying
+ * it to the label order meant adding "Outside" silently flipped Room B from
+ * purple to teal — it sorts between "Living room" and "Room B" — and renaming
+ * a room would have done the same. The MAC is the one identifier that never
+ * changes, so derive the colour from that.
+ *
+ * Hashing alone is not enough: six colours over five sensors collide about
+ * nine times in ten, and two rooms sharing a colour is worse than reshuffling.
+ * So each room takes its hashed colour when it is free and the next free one
+ * otherwise, walking the MACs in a fixed order. The firmware reports at most
+ * SLOT_STORE_MAX = 5 sensors, so six colours always go round.
+ *
+ * This is a smaller blast radius, not a zero one: a new sensor whose preferred
+ * colour is taken still walks to another and can push a later MAC along with
+ * it. Pinning a colour per MAC by hand is the only way to make it exactly
+ * zero, and that is not worth a config file for five sensors. */
+function assignColors(macs) {
+  const out = new Map();
+  const used = new Set();
+  for (const mac of [...macs].sort()) {
+    let h = 0;
+    for (let i = 0; i < mac.length; i++) h = (h * 31 + mac.charCodeAt(i)) >>> 0;
+    let c = h % COLORS.length;
+    while (used.has(c)) c = (c + 1) % COLORS.length;
+    used.add(c);
+    out.set(mac, COLORS[c]);
+  }
+  return out;
+}
+
+let colorOf = new Map();   // mac -> colour, rebuilt whenever the room set changes
+
 /* `view` picks the server-side rollup. Five-minute buckets are wasted on a
  * month — 4 sensors burn ~35k rows to draw a 300 px line — and PostgREST hands
  * back at most PAGE rows per request, so the coarse view is what keeps the long
@@ -152,6 +184,7 @@ function toSeries(rows) {
   }
 
   const list = [...byMac.values()].sort((a, b) => a.label.localeCompare(b.label));
+  colorOf = assignColors(list.map((r) => r.mac));
   return { x: times.map((t) => Date.parse(t) / 1000), rooms: list };
 }
 
@@ -208,7 +241,7 @@ function battLine(room) {
 function renderCards() {
   const el = $('cards');
   el.innerHTML = '';
-  rooms.forEach((room, i) => {
+  rooms.forEach((room) => {
     const lastIdx = room.humid.reduce((acc, v, n) => (v != null ? n : acc), -1);
     const rh = lastIdx >= 0 ? room.humid[lastIdx] : null;
     const t = lastIdx >= 0 ? room.temp[lastIdx] : null;
@@ -216,7 +249,7 @@ function renderCards() {
 
     const card = document.createElement('button');
     card.className = 'card' + (isHidden ? ' muted' : '');
-    card.style.setProperty('--seriescolor', COLORS[i % COLORS.length]);
+    card.style.setProperty('--seriescolor', colorOf.get(room.mac));
     card.title = isHidden ? 'Show this room' : 'Show only this room';
     card.innerHTML = `
       <div class="name">${room.label}</div>
@@ -409,9 +442,9 @@ function thresholdLine(value) {
 }
 
 function seriesDefs(valueFmt) {
-  return rooms.map((room, i) => ({
+  return rooms.map((room) => ({
     label: room.label,
-    stroke: COLORS[i % COLORS.length],
+    stroke: colorOf.get(room.mac),
     width: 2,
     spanGaps: false,
     show: !hidden.has(room.mac),
