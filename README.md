@@ -14,10 +14,18 @@ than for pretty curves. Everything below follows from that.
 
 ## Design notes
 
-**The humidity axis is fixed at 30–100 % with a threshold line at 65 %.**
-Auto-scaling is actively misleading here: it renders a 74 → 76 % wiggle as a
-mountain range and a flat, dangerous 78 % as unremarkable. Temperature *is*
-auto-scaled, because there the shape matters more than the absolute value.
+**Every axis auto-scales, with a floor on how far it can close in.** A fixed
+30–100 % humidity axis made the short windows useless — a room breathing
+between 57 and 59 %RH was a dead flat line, and every 6 h view looked the same.
+So the axis follows the data, but never narrows below a minimum span (8 %RH,
+1.5 °C, 10 % battery). That floor is what stops the other failure: half a
+percent of sensor noise stretched across 300 px and read as a crisis.
+
+**The mould line stays pinned in view from 8 %RH below it upwards.** Auto-scaling
+alone would render a flat, dangerous 78 % as unremarkable, so the humidity axis
+is never allowed to crop the threshold away while a room is near or above it.
+Well clear underneath, the line is not news and is let go rather than flattening
+the trace to hold it in frame.
 
 **Each card shows time spent above the threshold, not just the latest reading.**
 For damp, a brief spike is nothing and a persistent 78 % is the entire problem —

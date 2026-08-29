@@ -19,8 +19,9 @@
   <div id="empty" hidden>No readings in this range.</div>
   <section class="chart-panel" id="panel-rh">
     <h2>Relative humidity</h2>
-    <p class="note">Fixed 30–100 % axis with the mould line at <span id="thr">65</span> %.
-       Auto-scaling would make a flat 78 % look unremarkable.</p>
+    <p class="note">Auto-scaled, but the mould line at <span id="thr">65</span> % is pinned
+       into view whenever a room is near or above it — so a flat 78 % is still
+       drawn sitting above the line, not floating free.</p>
     <div id="chart-rh"></div>
   </section>
   <section class="chart-panel" id="panel-t">

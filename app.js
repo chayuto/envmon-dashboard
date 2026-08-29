@@ -41,6 +41,13 @@ const RANGES = [
     companion: { step: 7 * 86400, max: 4, unit: 'w' } },
 ];
 
+/* The floors below are "the smallest difference worth showing": 8 %RH and
+ * 1.5 °C are about what you can feel in a room, and a battery that moves less
+ * than 10 points over the window has, correctly, nothing to report. */
+const Y_RH   = autoRange({ minSpan: 8,   clamp: [0, 100], near: THRESHOLD });
+const Y_TEMP = autoRange({ minSpan: 1.5 });
+const Y_BATT = autoRange({ minSpan: 10,  clamp: [0, 100] });
+
 /* Enough line elements for the largest `max` above. */
 const COMPANION_MAX = 6;
 
@@ -330,10 +337,61 @@ function companionCursor() {
   };
 }
 
+/* Fixed y ranges made the short windows useless: a bedroom sitting between
+ * 57 and 59 %RH is a dead flat line inside a 30-100 axis, and every 6 h view
+ * looked identical. Scale to the data instead, with two guards.
+ *
+ * `minSpan` is the floor on how far the axis can close in. Without it a
+ * half-percent of sensor noise would be stretched to fill 300 px and every
+ * chart would look alarming; with it, a flat line is still drawn flat, which
+ * is the honest picture.
+ *
+ * `clamp` keeps the axis inside what the quantity can actually be (no 104 %
+ * humidity tick). It shifts the window rather than truncating it, so the
+ * minimum span survives at the extremes -- a battery pinned at 100 % gets
+ * 88-100, not a squashed 94-100. */
+function autoRange({ minSpan, pad = 0.08, clamp = [-Infinity, Infinity], near = null }) {
+  const [clampLo, clampHi] = clamp;
+  const base = clampLo === -Infinity ? 0 : clampLo;
+  return (u, dataMin, dataMax) => {
+    /* Every series hidden: uPlot has no extents to offer. Any axis will do, so
+     * long as it is a valid one. */
+    if (dataMin == null || dataMax == null) return [base, base + minSpan];
+
+    let lo = dataMin;
+    let hi = dataMax;
+
+    /* The reference line is pinned into view from `minSpan` below it upwards,
+     * and never let go above it. That asymmetry is the point: a room already
+     * over the mould line must be drawn *over the line*, or auto-scaling turns
+     * a flat 78 % into an unremarkable flat trace. Well clear underneath, the
+     * line is not news and holding it in frame would only flatten the trace. */
+    if (near != null && hi >= near - minSpan) {
+      lo = Math.min(lo, near);
+      hi = Math.max(hi, near);
+    }
+
+    const span = Math.max(hi - lo, minSpan);
+    const mid = (lo + hi) / 2;
+    const p = span * pad;
+    lo = mid - span / 2 - p;
+    hi = mid + span / 2 + p;
+
+    if (hi > clampHi) { const d = hi - clampHi; lo -= d; hi -= d; }
+    if (lo < clampLo) { const d = clampLo - lo; lo += d; hi += d; }
+    return [Math.max(lo, clampLo), Math.min(hi, clampHi)];
+  };
+}
+
 function thresholdLine(value) {
   return {
     hooks: {
       draw: [(u) => {
+        /* The y axis follows the data now, so the threshold is not always in
+         * frame. Drawing it anyway would paint a red line across the axis
+         * labels at whatever edge it fell off. */
+        const { min, max } = u.scales.y;
+        if (min == null || value < min || value > max) return;
         const y = u.valToPos(value, 'y', true);
         const ctx = u.ctx;
         ctx.save();
@@ -380,8 +438,28 @@ function upsertChart(kind, target, data, valueFmt, yRange, threshold, resetScale
   if (existing && existing.__key === key) {
     /* resetScales=false is what preserves a zoom across the 60 s poll. It must
      * be true when the window itself changed, or the new data is drawn inside
-     * the old range — which looked like "the chart needs two clicks to load". */
-    existing.setData(data, resetScales === true);
+     * the old range — which looked like "the chart needs two clicks to load".
+     *
+     * uPlot skips its commit entirely when resetScales is false, so that path
+     * has to re-assert the x window itself: without it the poll swapped the
+     * data in and never repainted, and the y axis never re-fitted. Re-setting
+     * the same min/max is what schedules the redraw. */
+    const xs = data[0];
+    const { min, max } = existing.scales.x;
+    const prev = existing.data[0];
+
+    /* "Live" means the window is still the whole dataset, so it should grow
+     * with it. Anything narrower is a zoom the user chose, and is kept. */
+    const live = min == null || max == null || !prev.length
+                 || (min <= prev[0] && max >= prev[prev.length - 1]);
+
+    if (resetScales === true || !xs.length) {
+      existing.setData(data, true);
+    } else {
+      existing.setData(data, false);
+      if (live) existing.setScale('x', { min: xs[0], max: xs[xs.length - 1] });
+      else existing.setScale('x', { min, max });
+    }
     return;
   }
   if (existing) existing.destroy();
@@ -391,7 +469,7 @@ function upsertChart(kind, target, data, valueFmt, yRange, threshold, resetScale
     width: el.clientWidth || 900,
     height: 300,
     series: [{ label: 'Time' }, ...seriesDefs(valueFmt)],
-    scales: { y: yRange ? { range: () => yRange } : {} },
+    scales: { y: { range: yRange } },
     cursor: { sync: { key: SYNC.key } },
     axes: [
       { stroke: '#8b93a3', grid: { stroke: '#262b36' }, ticks: { stroke: '#262b36' } },
@@ -453,11 +531,11 @@ async function refresh({ resetScales = false } = {}) {
     renderCards();
 
     upsertChart('rh', 'chart-rh', [shaped.x, ...rooms.map((r) => r.humid)],
-                (v) => `${v.toFixed(1)} %`, [30, 100], THRESHOLD, resetScales);
+                (v) => `${v.toFixed(1)} %`, Y_RH, THRESHOLD, resetScales);
     upsertChart('t', 'chart-t', [shaped.x, ...rooms.map((r) => r.temp)],
-                (v) => `${v.toFixed(1)} °C`, null, null, resetScales);
+                (v) => `${v.toFixed(1)} °C`, Y_TEMP, null, resetScales);
     upsertChart('b', 'chart-b', [shaped.x, ...rooms.map((r) => r.batt)],
-                (v) => `${v.toFixed(0)} %`, [0, 100], null, resetScales);
+                (v) => `${v.toFixed(0)} %`, Y_BATT, null, resetScales);
     applyHidden();
 
     const newest = new Date(rows[rows.length - 1].bucket);
