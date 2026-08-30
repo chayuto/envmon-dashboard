@@ -16,6 +16,35 @@
 const CFG = window.ENVMON_CONFIG || {};
 const THRESHOLD = CFG.humidityThreshold ?? 65;
 
+/* Relative humidity is a ratio against what the air could hold at its own
+ * temperature, which makes it the wrong number for every question this
+ * dashboard exists to answer. Cold air reads damp while carrying very little
+ * water: outdoor air at 87 % RH and 10.6 C holds 8.5 g/m3, against 10.6 g/m3
+ * in an 17 C room at 74 %. Opening up there DRIES the house, and the RH
+ * numbers say the exact opposite.
+ *
+ * So every derived figure below works in g of water per m3 of air, which is
+ * comparable between two rooms at different temperatures. Magnus formula for
+ * saturation vapour pressure; same constants as tools/ventilation.sh in the
+ * firmware repo, so the dashboard and the CLI cannot disagree. */
+function absHumidity(t, rh) {
+  if (t == null || rh == null) return null;
+  return 6.112 * Math.exp(17.67 * t / (t + 243.5)) * rh * 2.1674 / (273.15 + t);
+}
+
+/* The temperature at which this air starts condensing. Any surface colder than
+ * this gets wet — which is how the bedroom window frame grows mould while the
+ * room air looks merely "high". */
+function dewPoint(t, rh) {
+  if (t == null || rh == null || rh <= 0) return null;
+  const g = Math.log(rh / 100) + 17.625 * t / (243.04 + t);
+  return 243.04 * g / (17.625 - g);
+}
+
+/* Below this the two sensors cannot be told apart, so no honest verdict is
+ * available. Matches the band tools/ventilation.sh uses. */
+const VENT_NOISE = 0.5;
+
 /* Red is reserved for the mould threshold, so no room borrows it. */
 const COLORS = ['#4fc3f7', '#ffd54f', '#81c784', '#ba68c8', '#4dd0e1', '#f06292'];
 
@@ -78,6 +107,9 @@ const RANGES = [
  * than 10 points over the window has, correctly, nothing to report. */
 const Y_RH   = autoRange({ minSpan: 8,   clamp: [0, 100], near: THRESHOLD });
 const Y_TEMP = autoRange({ minSpan: 1.5 });
+/* 1.5 g/m³ is about the gap that makes airing worth doing, so an axis narrower
+ * than that would magnify differences too small to act on. */
+const Y_AH   = autoRange({ minSpan: 1.5, clamp: [0, Infinity] });
 const Y_BATT = autoRange({ minSpan: 10,  clamp: [0, 100] });
 
 /* Enough line elements for the largest `max` above. */
@@ -92,10 +124,22 @@ const SYNC = uPlot.sync('envmon');
 let range = RANGES[1];
 let hidden = new Set();          // macs the user has switched off
 let rooms = [];                  // last render's room list
-const charts = { rh: null, t: null, b: null };
+const charts = { rh: null, ah: null, t: null, b: null };
 
 const $ = (id) => document.getElementById(id);
 const fmt1 = (v) => (v == null ? '—' : v.toFixed(1));
+const fmt2 = (v) => (v == null ? '—' : v.toFixed(2));
+
+function dewPointTitle(cond) {
+  const base = 'Dew point — any surface colder than this condenses.';
+  if (!cond) return base;
+  const { margin, coldest } = cond;
+  const ref = `\nComparison is the coldest outdoor temperature in view, ${coldest.toFixed(1)} °C, `
+            + 'because glass tracks outdoor temperature and condensation is an overnight event.';
+  return margin > 0
+    ? `${base}${ref}\n\nThis room's dew point is ${margin.toFixed(1)} °C ABOVE that — window glass and reveals spend part of the night wet.`
+    : `${base}${ref}\n\nThis room's dew point is ${Math.abs(margin).toFixed(1)} °C below that, so even the coldest surfaces should stay dry.`;
+}
 
 /* --- view state in the URL, so a filtered view is shareable ------------- */
 
@@ -143,7 +187,7 @@ async function fetchRows(hours) {
   const out = [];
   for (let offset = 0; ; offset += PAGE) {
     const url = `${CFG.supabaseUrl}/rest/v1/${range.view}` +
-                `?select=bucket,mac,label,temp_c,humid,battery` +
+                `?select=bucket,mac,label,temp_c,humid,battery,placement` +
                 `&bucket=gte.${since}&order=bucket.asc,mac.asc` +
                 `&limit=${PAGE}&offset=${offset}`;
     const res = await fetch(url, { headers });
@@ -171,9 +215,11 @@ function toSeries(rows) {
       byMac.set(r.mac, {
         mac: r.mac,
         label: r.label || r.mac.slice(-5),
+        placement: r.placement || 'indoor',
         humid: new Array(times.length).fill(null),
         temp: new Array(times.length).fill(null),
         batt: new Array(times.length).fill(null),
+        ah: new Array(times.length).fill(null),
       });
     }
     const room = byMac.get(r.mac);
@@ -181,6 +227,7 @@ function toSeries(rows) {
     room.humid[i] = r.humid;
     room.temp[i] = r.temp_c;
     room.batt[i] = r.battery;
+    room.ah[i] = absHumidity(r.temp_c, r.humid);
   }
 
   const list = [...byMac.values()].sort((a, b) => a.label.localeCompare(b.label));
@@ -238,13 +285,61 @@ function battLine(room) {
   return `${pct} · ${b.perDay.toFixed(2)} %/day · ${left}`;
 }
 
+/* The latest non-null sample for a room, as {rh, t, ah, dp}. Rooms drop
+ * buckets independently, so "the last index" is per-room, not global. */
+function latest(room) {
+  const i = room.humid.reduce((acc, v, n) => (v != null ? n : acc), -1);
+  if (i < 0) return { rh: null, t: null, ah: null, dp: null };
+  return { rh: room.humid[i], t: room.temp[i], ah: room.ah[i],
+           dp: dewPoint(room.temp[i], room.humid[i]) };
+}
+
+/* Should you open this room's window right now? Ventilating swaps room air for
+ * outdoor air, so it removes water whenever outdoor g/m3 is below indoor g/m3
+ * -- regardless of which RH number is larger. The temperature cost is reported
+ * alongside because incoming air is usually colder, and chilling the surfaces
+ * is what condenses water on them even when the air is drier. */
+function ventVerdict(room, outdoor) {
+  if (!outdoor || room === outdoor) return null;
+  const a = latest(room), o = latest(outdoor);
+  if (a.ah == null || o.ah == null) return null;
+  const delta = o.ah - a.ah;                 // negative = outdoor is drier
+  const cost = (o.t != null && a.t != null) ? o.t - a.t : null;
+  const cls = delta < -VENT_NOISE ? 'open' : delta > VENT_NOISE ? 'shut' : 'none';
+  const word = cls === 'open' ? 'OPEN' : cls === 'shut' ? 'KEEP SHUT' : 'NO GAIN';
+  return { cls, word, delta, cost };
+}
+
+/* Will surfaces in this room condense? Compare its dew point against the
+ * COLDEST outdoor temperature in view, not the current one.
+ *
+ * Against the current outdoor temperature this reads safe all afternoon and
+ * only warns at night -- by which point nobody is looking and nothing can be
+ * done. Condensation is an overnight event: the glass tracks outdoor
+ * temperature, so what matters is whether the room's dew point clears the
+ * coldest the glass is going to get. Positive means it does not, and the
+ * window and its reveal spend part of the night wet. That is the number that
+ * would have predicted the bedroom window-frame mould from the air readings
+ * alone. */
+function condensationMargin(room, outdoor) {
+  if (!outdoor || room === outdoor) return null;
+  const dp = latest(room).dp;
+  if (dp == null) return null;
+  let coldest = null;
+  for (const t of outdoor.temp) if (t != null && (coldest == null || t < coldest)) coldest = t;
+  return coldest == null ? null : { margin: dp - coldest, coldest };
+}
+
 function renderCards() {
   const el = $('cards');
   el.innerHTML = '';
+  const outdoor = rooms.find((r) => r.placement === 'outdoor');
+
   rooms.forEach((room) => {
-    const lastIdx = room.humid.reduce((acc, v, n) => (v != null ? n : acc), -1);
-    const rh = lastIdx >= 0 ? room.humid[lastIdx] : null;
-    const t = lastIdx >= 0 ? room.temp[lastIdx] : null;
+    const { rh, t, ah, dp } = latest(room);
+    const vent = ventVerdict(room, outdoor);
+    const cond = condensationMargin(room, outdoor);
+    const margin = cond ? cond.margin : null;
     const isHidden = hidden.has(room.mac);
 
     const card = document.createElement('button');
@@ -263,6 +358,23 @@ function renderCards() {
           <div class="rlabel">temperature</div>
         </div>
       </div>
+      <div class="derived">
+        <span title="Absolute humidity — grams of water per cubic metre of air.
+Comparable between rooms at different temperatures, unlike RH.">${fmt2(ah)}<span class="unit">g/m³</span></span>
+        <span class="${margin != null && margin > 0 ? 'risk' : ''}"
+              title="${dewPointTitle(cond)}">dew ${fmt1(dp)}<span class="unit">°C</span>${
+                margin == null ? '' : ` <span class="margin">${margin > 0 ? '+' : ''}${fmt1(margin)}</span>`}</span>
+      </div>
+      ${vent ? `<div class="vent ${vent.cls}" title="Outdoor air is ${
+          vent.delta < 0 ? 'drier' : 'wetter'} than this room by ${
+          Math.abs(vent.delta).toFixed(2)} g/m³.${
+          vent.cost == null ? '' : ` Airing would change the temperature by ${vent.cost.toFixed(1)} °C.`}">
+        ${vent.word} <span class="vd">${vent.delta > 0 ? '+' : ''}${fmt2(vent.delta)} g/m³</span>${
+        vent.cost == null ? '' : `<span class="vc">${vent.cost > 0 ? '+' : ''}${fmt1(vent.cost)} °C</span>`}
+      </div>`
+      : room.placement === 'outdoor'
+        ? `<div class="vent ref" title="This is the outdoor reference every other room is compared against.">REFERENCE</div>`
+        : ''}
       <div class="batt">${battLine(room)}</div>`;
 
     /* Clicking a card isolates that room; clicking the isolated one restores
@@ -453,7 +565,7 @@ function seriesDefs(valueFmt) {
 }
 
 function applyHidden() {
-  for (const u of [charts.rh, charts.t, charts.b]) {
+  for (const u of [charts.rh, charts.ah, charts.t, charts.b]) {
     if (!u) continue;
     rooms.forEach((room, i) => {
       const want = !hidden.has(room.mac);
@@ -531,7 +643,7 @@ function upsertChart(kind, target, data, valueFmt, yRange, threshold, resetScale
 /* Setting the scale to null does not restore extents in uPlot — it has to be
  * pointed back at the data's own range explicitly. */
 function resetZoom() {
-  for (const u of [charts.rh, charts.t, charts.b]) {
+  for (const u of [charts.rh, charts.ah, charts.t, charts.b]) {
     if (!u) continue;
     const xs = u.data[0];
     if (xs && xs.length) u.setScale('x', { min: xs[0], max: xs[xs.length - 1] });
@@ -550,13 +662,15 @@ async function refresh({ resetScales = false } = {}) {
 
     if (!rows.length) {
       $('empty').hidden = false;
-      $('panel-rh').hidden = $('panel-t').hidden = $('panel-b').hidden = true;
+      $('panel-rh').hidden = $('panel-ah').hidden =
+      $('panel-t').hidden = $('panel-b').hidden = true;
       $('cards').innerHTML = '';
       setStatus('no data in range', 'stale');
       return;
     }
     $('empty').hidden = true;
-    $('panel-rh').hidden = $('panel-t').hidden = $('panel-b').hidden = false;
+    $('panel-rh').hidden = $('panel-ah').hidden =
+      $('panel-t').hidden = $('panel-b').hidden = false;
 
     const shaped = toSeries(rows);
     rooms = shaped.rooms;
@@ -565,6 +679,8 @@ async function refresh({ resetScales = false } = {}) {
 
     upsertChart('rh', 'chart-rh', [shaped.x, ...rooms.map((r) => r.humid)],
                 (v) => `${v.toFixed(1)} %`, Y_RH, THRESHOLD, resetScales);
+    upsertChart('ah', 'chart-ah', [shaped.x, ...rooms.map((r) => r.ah)],
+                (v) => `${v.toFixed(2)} g/m³`, Y_AH, null, resetScales);
     upsertChart('t', 'chart-t', [shaped.x, ...rooms.map((r) => r.temp)],
                 (v) => `${v.toFixed(1)} °C`, Y_TEMP, null, resetScales);
     upsertChart('b', 'chart-b', [shaped.x, ...rooms.map((r) => r.batt)],

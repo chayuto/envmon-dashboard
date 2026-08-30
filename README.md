@@ -27,6 +27,21 @@ is never allowed to crop the threshold away while a room is near or above it.
 Well clear underneath, the line is not news and is let go rather than flattening
 the trace to hold it in frame.
 
+**Absolute humidity (g/m³) is the number the house is actually judged on.**
+Relative humidity is a ratio against what air can hold at its own temperature,
+so it says nothing comparable between two rooms at different temperatures, or
+between inside and outside. The two humidity panels are deliberately adjacent
+and show the same data: outdoor is the *top* line on the RH chart, peaking near
+90 %, and the *bottom* line on the absolute humidity chart. Airing the house at
+that moment dries it, and only one of the two charts can tell you so.
+
+**Each card carries a ventilation verdict and a condensation margin.** The
+verdict is indoor minus outdoor g/m³ with the temperature cost, because the
+recurring question is "should I open a window now" and RH cannot answer it. The
+condensation margin is the room's dew point against the **coldest** outdoor
+temperature in view, not the current one — condensation is an overnight event,
+and a margin measured at midday reads safe until it is too late to act.
+
 **Each card shows time spent above the threshold, not just the latest reading.**
 For damp, a brief spike is nothing and a persistent 78 % is the entire problem —
 and the two look almost identical on a line chart.
