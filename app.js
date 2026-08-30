@@ -110,6 +110,11 @@ const Y_TEMP = autoRange({ minSpan: 1.5 });
 /* 1.5 g/m³ is about the gap that makes airing worth doing, so an axis narrower
  * than that would magnify differences too small to act on. */
 const Y_AH   = autoRange({ minSpan: 1.5, clamp: [0, Infinity] });
+/* Both decision charts are read against a line, so `near` keeps that line in
+ * frame at all times -- an axis that cropped the decision boundary would be
+ * worse than no chart. */
+const Y_GAIN = autoRange({ minSpan: 1.0, near: VENT_NOISE });
+const Y_COND = autoRange({ minSpan: 2.0, near: 0 });
 const Y_BATT = autoRange({ minSpan: 10,  clamp: [0, 100] });
 
 /* Enough line elements for the largest `max` above. */
@@ -124,7 +129,7 @@ const SYNC = uPlot.sync('envmon');
 let range = RANGES[1];
 let hidden = new Set();          // macs the user has switched off
 let rooms = [];                  // last render's room list
-const charts = { rh: null, ah: null, t: null, b: null };
+const charts = { rh: null, ah: null, gain: null, cond: null, t: null, b: null };
 
 const $ = (id) => document.getElementById(id);
 const fmt1 = (v) => (v == null ? '—' : v.toFixed(1));
@@ -565,7 +570,7 @@ function seriesDefs(valueFmt) {
 }
 
 function applyHidden() {
-  for (const u of [charts.rh, charts.ah, charts.t, charts.b]) {
+  for (const u of [charts.rh, charts.ah, charts.gain, charts.cond, charts.t, charts.b]) {
     if (!u) continue;
     rooms.forEach((room, i) => {
       const want = !hidden.has(room.mac);
@@ -643,11 +648,22 @@ function upsertChart(kind, target, data, valueFmt, yRange, threshold, resetScale
 /* Setting the scale to null does not restore extents in uPlot — it has to be
  * pointed back at the data's own range explicitly. */
 function resetZoom() {
-  for (const u of [charts.rh, charts.ah, charts.t, charts.b]) {
+  for (const u of [charts.rh, charts.ah, charts.gain, charts.cond, charts.t, charts.b]) {
     if (!u) continue;
     const xs = u.data[0];
     if (xs && xs.length) u.setScale('x', { min: xs[0], max: xs[xs.length - 1] });
   }
+}
+
+/* Both charts below are per-room differences against the outdoor sensor, so the
+ * outdoor room itself has no meaningful value. It keeps its series slot filled
+ * with nulls rather than being dropped: series index maps to `rooms` index in
+ * applyHidden and in the colour assignment, and removing one would silently
+ * shift every room after it onto the wrong series. */
+function seriesVsOutdoor(rooms, outdoor, fn) {
+  return rooms.map((room) =>
+    room === outdoor ? new Array(room.temp.length).fill(null)
+                     : room.temp.map((t, i) => fn(room, outdoor, i)));
 }
 
 /* --- main loop ---------------------------------------------------------- */
@@ -662,8 +678,8 @@ async function refresh({ resetScales = false } = {}) {
 
     if (!rows.length) {
       $('empty').hidden = false;
-      $('panel-rh').hidden = $('panel-ah').hidden =
-      $('panel-t').hidden = $('panel-b').hidden = true;
+      $('panel-rh').hidden = $('panel-ah').hidden = $('panel-gain').hidden =
+      $('panel-cond').hidden = $('panel-t').hidden = $('panel-b').hidden = true;
       $('cards').innerHTML = '';
       setStatus('no data in range', 'stale');
       return;
@@ -681,6 +697,25 @@ async function refresh({ resetScales = false } = {}) {
                 (v) => `${v.toFixed(1)} %`, Y_RH, THRESHOLD, resetScales);
     upsertChart('ah', 'chart-ah', [shaped.x, ...rooms.map((r) => r.ah)],
                 (v) => `${v.toFixed(2)} g/m³`, Y_AH, null, resetScales);
+    /* Both decision charts need an outdoor reference. Without one they would
+     * be flat nothing, so hide them rather than draw an empty panel. */
+    const outdoor = rooms.find((r) => r.placement === 'outdoor');
+    $('panel-gain').hidden = $('panel-cond').hidden = !outdoor;
+    if (outdoor) {
+      upsertChart('gain', 'chart-gain',
+        [shaped.x, ...seriesVsOutdoor(rooms, outdoor,
+          (room, o, i) => (room.ah[i] == null || o.ah[i] == null) ? null
+                                                                 : room.ah[i] - o.ah[i])],
+        (v) => `${v.toFixed(2)} g/m³`, Y_GAIN, VENT_NOISE, resetScales);
+
+      upsertChart('cond', 'chart-cond',
+        [shaped.x, ...seriesVsOutdoor(rooms, outdoor, (room, o, i) => {
+          const dp = dewPoint(room.temp[i], room.humid[i]);
+          return (dp == null || o.temp[i] == null) ? null : dp - o.temp[i];
+        })],
+        (v) => `${v.toFixed(1)} °C`, Y_COND, 0, resetScales);
+    }
+
     upsertChart('t', 'chart-t', [shaped.x, ...rooms.map((r) => r.temp)],
                 (v) => `${v.toFixed(1)} °C`, Y_TEMP, null, resetScales);
     upsertChart('b', 'chart-b', [shaped.x, ...rooms.map((r) => r.batt)],

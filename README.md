@@ -35,6 +35,20 @@ and show the same data: outdoor is the *top* line on the RH chart, peaking near
 90 %, and the *bottom* line on the absolute humidity chart. Airing the house at
 that moment dries it, and only one of the two charts can tell you so.
 
+**Two charts plot differences against outside, because a difference is what
+you act on.** *Airing gain* (room minus outdoor g/m³) shows when the gap is
+worth using rather than only whether it is open now — on a normal night it
+climbs through the evening, peaks around 06:00, and collapses by mid-morning.
+*Condensation risk* (dew point minus outdoor temperature) is the only chart
+here that cannot be read off any of the others: it combines a quantity that is
+plotted nowhere with one plotted on a different panel, and it shows the hours
+each night that window glass and reveals actually spend wet.
+
+Both are read against a dashed decision line, so their y axes pin that line
+into view. The outdoor sensor keeps its series slot on both, filled with nulls
+— dropping it would shift every later room onto the wrong series, since series
+index maps to room index for visibility and colour.
+
 **Each card carries a ventilation verdict and a condensation margin.** The
 verdict is indoor minus outdoor g/m³ with the temperature cost, because the
 recurring question is "should I open a window now" and RH cannot answer it. The
